@@ -17,7 +17,7 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from src.config import get_config, MODEL_REGISTRY, PIPELINE_MODELS
 from src.data.loader import load_halueval, load_triviaqa
-from src.data.feature_extractor import extract_dataset, SEQ_BASE_DIM, GLOB_BASE_DIM
+from src.data.feature_extractor import extract_dataset, SEQ_DIM, GLOB_BASE_DIM
 from src.training.trainer import train_deep_model_fold, extract_features_batch, extract_logits_batch
 from src.ensemble.meta_learner import get_ensemble, calibrate_ensemble, temperature_scale
 from src.utils.metrics import find_best_thresholds, evaluate_all, compute_uncertainty_metrics
@@ -114,7 +114,8 @@ def stage_2_3_train_oof(args, config):
     print(f"\n--- Stage 2 & 3: Multi-Scale Modeling & Out-of-Fold Generation ---")
     print(f"seed={config.seed} mixup={config.use_mixup} cutmix={config.use_cutmix} "
           f"layer_delta={config.use_layer_delta} layer_scale={config.scale_layer_weights} "
-          f"rank_weight={config.rank_loss_weight}")
+          f"rank_weight={config.rank_loss_weight} answer_ll={config.use_answer_ll} "
+          f"stack={args.stack_mode}")
     feat_key = _key(args, tag=False)
     try:
         X_seq = np.load(f'results/features/X_seq_{feat_key}.npy')
@@ -124,10 +125,10 @@ def stage_2_3_train_oof(args, config):
         print("Features not found. Please run --stage extract first.")
         return
 
-    # The added columns come after the original ones, so ablating them is just slicing.
-    if args.no_lens:
-        X_seq = X_seq[:, :, :SEQ_BASE_DIM]
-    if args.no_answer_ll:
+    # Added columns come after the original ones, so dropping them is just slicing. This also lets
+    # feature files that still carry the old logit-lens channels (seq 14) be reused as they are.
+    X_seq = X_seq[:, :, :SEQ_DIM]
+    if not config.use_answer_ll:
         X_glob = X_glob[:, :GLOB_BASE_DIM]
     print(f"Input features: seq {X_seq.shape[1:]}, global {X_glob.shape[1:]}")
 
@@ -246,23 +247,36 @@ def main():
     parser.add_argument("--extract_batch_size", type=int, default=4,
                         help="Batch size for LLM feature extraction; lower it (e.g. 2) if you hit CUDA OOM")
 
-    # Stacking and ablation options
-    parser.add_argument("--stack_mode", type=str, default="logit", choices=["logit", "vector"],
-                        help="logit: stack fold-network logits + global features; vector: stack the 576-d features (original)")
+    # Improvements over the base pipeline. With none of these flags the base pipeline runs.
+    parser.add_argument("--improved", action="store_true",
+                        help="Apply everything: --layer_delta --layer_scale --rank_weight 0.1 --answer_ll --stack_mode logit")
+    parser.add_argument("--layer_delta", action="store_true",
+                        help="Add layer-to-layer delta channels to the sequential input")
+    parser.add_argument("--layer_scale", action="store_true",
+                        help="Scale the softmax layer weights by the number of layers")
+    parser.add_argument("--rank_weight", type=float, default=None,
+                        help="Weight of the pairwise AUC loss (default 0 = off)")
+    parser.add_argument("--answer_ll", action="store_true",
+                        help="Use the 4 answer log-likelihood features (global 30 -> 34)")
+    parser.add_argument("--stack_mode", type=str, default=None, choices=["logit", "vector"],
+                        help="vector (default): stack the 576-d features; logit: stack fold-network logits + global features")
+
+    # Run management
     parser.add_argument("--seed", type=int, default=None, help="Override config.seed (changes the split and the folds)")
     parser.add_argument("--tag", type=str, default="",
-                        help="Suffix for OOF/plot files so several runs (seeds, ablations) do not overwrite each other")
-    parser.add_argument("--no_mixup", action="store_true", help="Ablation: disable Mixup")
-    parser.add_argument("--no_cutmix", action="store_true", help="Ablation: disable CutMix")
-    parser.add_argument("--no_layer_delta", action="store_true", help="Ablation: disable layer-to-layer delta channels")
-    parser.add_argument("--no_layer_scale", action="store_true", help="Ablation: disable the xL scaling of layer weights")
-    parser.add_argument("--rank_weight", type=float, default=None,
-                        help="Override the pairwise AUC loss weight (0 disables it)")
-    parser.add_argument("--no_lens", action="store_true",
-                        help="Ablation: drop the 2 logit-lens channels per layer (seq 14 -> 12)")
-    parser.add_argument("--no_answer_ll", action="store_true",
-                        help="Ablation: drop the 4 answer log-likelihood features (global 34 -> 30)")
+                        help="Suffix for OOF/plot files so several runs (seeds, variants) do not overwrite each other")
+    parser.add_argument("--no_mixup", action="store_true", help="Disable Mixup")
+    parser.add_argument("--no_cutmix", action="store_true", help="Disable CutMix")
     args = parser.parse_args()
+
+    if args.improved:
+        args.layer_delta = args.layer_scale = args.answer_ll = True
+        if args.rank_weight is None:
+            args.rank_weight = 0.1
+        if args.stack_mode is None:
+            args.stack_mode = "logit"
+    if args.stack_mode is None:
+        args.stack_mode = "vector"
 
     config = get_config()
     if args.seed is not None:
@@ -271,10 +285,9 @@ def main():
         config.use_mixup = False
     if args.no_cutmix:
         config.use_cutmix = False
-    if args.no_layer_delta:
-        config.use_layer_delta = False
-    if args.no_layer_scale:
-        config.scale_layer_weights = False
+    config.use_layer_delta = args.layer_delta
+    config.scale_layer_weights = args.layer_scale
+    config.use_answer_ll = args.answer_ll
     if args.rank_weight is not None:
         config.rank_loss_weight = args.rank_weight
 

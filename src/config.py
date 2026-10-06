@@ -43,11 +43,13 @@ class Config:
     swa_start = 30
     swa_lr = 5e-5
     
-    # Group A improvements. Each can be switched off from run_pipeline.py for ablation.
-    use_layer_delta = True       # add x_l - x_(l-1) channels to the sequential input (12 -> 24)
-    scale_layer_weights = True   # softmax layer weights times L, so initialisation is identity
-    rank_loss_weight = 0.1       # weight of the pairwise AUC loss; 0 disables it
+    # Improvements, all OFF by default (= base). run_pipeline.py switches them on with --improved
+    # or one by one (--layer_delta, --layer_scale, --rank_weight, --answer_ll, --stack_mode logit).
+    use_layer_delta = False      # add x_l - x_(l-1) channels to the sequential input (12 -> 24)
+    scale_layer_weights = False  # softmax layer weights times L, so initialisation is identity
+    rank_loss_weight = 0.0       # weight of the pairwise AUC loss; 0 disables it
     rank_loss_tau = 1.0          # temperature of the pairwise AUC loss
+    use_answer_ll = False        # feed the 4 answer log-likelihood features to the model
 
     use_class_weights = False
     minority_oversample = 1.0

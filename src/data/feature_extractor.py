@@ -5,10 +5,9 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-# Feature layout. The first SEQ_BASE_DIM / GLOB_BASE_DIM columns are the original features, so
-# run_pipeline.py can drop the added ones (--no_lens, --no_answer_ll) for ablations.
-SEQ_BASE_DIM = 12               # 10 last-token statistics + 2 mean-over-tokens statistics
-SEQ_DIM = SEQ_BASE_DIM + 2      # + logit-lens entropy and JS divergence to the final layer
+# Feature layout. The first GLOB_BASE_DIM global columns are the original features; the last 4 are
+# the answer log-likelihood statistics, which run_pipeline.py drops unless --answer_ll is given.
+SEQ_DIM = 12                    # 10 last-token statistics + 2 mean-over-tokens statistics
 GLOB_BASE_DIM = 30
 GLOB_DIM = GLOB_BASE_DIM + 4    # + answer-span log-likelihood statistics
 
@@ -42,7 +41,7 @@ def get_anchor_stats(seq_feats: list, sampled_indices: list[int],
     return anchor_stats
 
 def _layer_stats(x):
-    """10 statistics per row of x [B, H], all of the last token; the caller appends 4 more."""
+    """10 statistics of the last token per row of x [B, H]; the caller appends 2 more."""
     mu = x.mean(-1, keepdim=True)
     std = x.std(-1, keepdim=True)
     p = F.softmax(x, dim=-1)
@@ -56,14 +55,6 @@ def _layer_stats(x):
         torch.where(std.squeeze(-1) < 1e-9, 0.0, kurtosis),
         (x - med).abs().median(-1).values,
     ]
-
-def _lens_modules(model_llm):
-    """(final norm, output head): they turn an intermediate hidden state into a next-token distribution."""
-    norm = getattr(getattr(model_llm, "model", None), "norm", None)
-    head = model_llm.get_output_embeddings()
-    if norm is None or head is None:
-        raise RuntimeError("Logit lens needs model.model.norm and an output head; this architecture has neither")
-    return norm, head
 
 def _answer_lengths(questions, tokenizer, attention_mask):
     """Number of answer tokens per prompt, i.e. the tokens after 'Answer:'.
@@ -100,7 +91,7 @@ def _answer_ll_stats(logits_kept, input_ids, n_ans):
 def extract_features(questions, answers, tokenizer, model_llm, config):
     """Features for a batch of question/answer pairs.
 
-    Returns (seq [B, n_sample_layers, SEQ_DIM=14], glob [B, GLOB_DIM=34]) as float32 arrays.
+    Returns (seq [B, n_sample_layers, 12], glob [B, 34]) as float32 arrays.
     """
     prompts = [f"Question: {q}\nAnswer: {a}" for q, a in zip(questions, answers, strict=True)]
     # Left padding keeps every prompt's last real token at index -1.
@@ -110,7 +101,6 @@ def extract_features(questions, answers, tokenizer, model_llm, config):
     n_ans = _answer_lengths(questions, tokenizer, inputs["attention_mask"])
     # Logits are only needed for the answer span plus the last position, which is right-aligned.
     outputs = model_llm(**inputs, output_hidden_states=True, logits_to_keep=max(n_ans) + 1)
-    norm, head = _lens_modules(model_llm)
 
     hidden_states = outputs.hidden_states
     n_total_layers  = len(hidden_states) - 1
@@ -119,7 +109,6 @@ def extract_features(questions, answers, tokenizer, model_llm, config):
 
     logits = outputs.logits[:, -1].float()
     probs = F.softmax(logits, dim=-1)
-    final_logp = F.log_softmax(logits, dim=-1)
 
     mask = inputs["attention_mask"].unsqueeze(-1).float()
     n_tokens = mask.sum(1)
@@ -128,21 +117,10 @@ def extract_features(questions, answers, tokenizer, model_llm, config):
         hs = hidden_states[layer_idx].float()
         mean_hs = (hs * mask).sum(1) / n_tokens          # mean over real tokens only
 
-        # Logit lens: read this layer's last token as a next-token distribution. The last hidden
-        # state already has the final norm applied, so only the earlier ones need it.
-        h_last = hidden_states[layer_idx][:, -1]
-        if layer_idx < n_total_layers:
-            h_last = norm(h_last)
-        lens_logp = F.log_softmax(head(h_last).float(), dim=-1)
-        lens_p = lens_logp.exp()
-        lens_entropy = -(lens_p * lens_logp).sum(-1)
-        m_logp = torch.log(0.5 * (lens_p + probs) + 1e-12)
-        js = 0.5 * (lens_p * (lens_logp - m_logp)).sum(-1) + 0.5 * (probs * (final_logp - m_logp)).sum(-1)
-
         layers.append(torch.stack(
-            _layer_stats(hs[:, -1]) + [mean_hs.norm(dim=-1), mean_hs.std(-1), lens_entropy, js], dim=-1))
+            _layer_stats(hs[:, -1]) + [mean_hs.norm(dim=-1), mean_hs.std(-1)], dim=-1))
     seq = torch.nan_to_num(torch.stack(layers, dim=1), nan=0.0, posinf=0.0, neginf=0.0)
-    seq = seq.cpu().numpy().astype(np.float32)           # [B, L, 14]
+    seq = seq.cpu().numpy().astype(np.float32)           # [B, L, 12]
 
     top = torch.topk(probs, k=3).values.cpu().numpy()
     logit_entropy = -(probs * torch.log(probs + 1e-10)).sum(-1).cpu().numpy()
@@ -190,7 +168,6 @@ def extract_dataset(samples, tokenizer, model_llm, config, ckpt_path,
     max_fail_frac failed samples aborts the run. The caller deletes ckpt_path
     after it has saved the result.
     """
-    _lens_modules(model_llm)   # fail now instead of failing every batch
     all_seq, all_glob, all_labels = [], [], []
     start = n_failed = 0
     if os.path.exists(ckpt_path):
