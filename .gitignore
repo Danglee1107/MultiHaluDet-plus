@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.venv/
+env/
+venv/
+.env
+
+# Cache
+.pytest_cache/
+.cache/
+.ipynb_checkpoints/
+
+# Data and Artifacts
+results/
+*.png
+!figures/*.png
+*.pdf
+!MultiHaluDet_Poster.pdf
+*.log
+github.txt
+
+# OS
+.DS_Store
