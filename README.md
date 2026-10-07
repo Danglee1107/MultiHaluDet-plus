@@ -18,6 +18,7 @@ Improvements (all enabled by `--improved`): `--layer_delta`, `--layer_scale`, `-
 ```bash
 git clone https://github.com/Danglee1107/MultiHaluDet-plus.git && cd MultiHaluDet-plus
 ```
+then
 
 ```bash
 
