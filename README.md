@@ -1,4 +1,4 @@
-# MultiHaluDet (improved)
+# MultiHaluDet plus 
 
 White-box hallucination detection for LLMs from their internal states, evaluated on HaluEval QA (English, French, Vietnamese).
 
@@ -16,27 +16,27 @@ Improvements (all enabled by `--improved`): `--layer_delta`, `--layer_scale`, `-
 ## Setup
 
 ```bash
-git clone <repo-url> && cd <repo>
-python -m venv .venv && source .venv/bin/activate
-
-pip install torch transformers accelerate bitsandbytes datasets \
-            scikit-learn scipy numpy joblib xgboost lightgbm \
-            matplotlib tqdm python-dotenv
+git clone https://github.com/Danglee1107/MultiHaluDet-plus.git && cd MultiHaluDet-plus
 ```
-
-HuggingFace token (required for the gated `meta-llama/Llama-2-7b-hf`):
 
 ```bash
-echo "HF_TOKEN=hf_xxx" > .env
+
+uv sync
+
+```
+or 
+
+```bash
+pip install -r requirements.txt
 ```
 
-Expected layout (the code imports `src.*`):
+## Structure
 
 ```
 .
 ├── run_pipeline.py
 ├── figures/pipeline.png
-├── data/                      # halueval_{en,fr,vi}.json (en falls back to HuggingFace if missing)
+├── data/                      # halueval_{en,fr,bn,vi}.json (en falls back to HuggingFace if missing)
 ├── src/
 │   ├── config.py
 │   ├── data/        loader.py, feature_extractor.py
@@ -97,7 +97,7 @@ Outputs: `results/features/` (LLM features), `results/oof/` (out-of-fold outputs
 
 Mean ± sample std over 5 seeds: 1, 11, 29, 37, 43.
 
-| Model | Language | Base | Improved | Δ | Improved wins |
+| Model | Language | Base (AUROC) | Improved (AUROC) | Δ AUROC | Improved wins |
 |---|---|---|---|---|---|
 | Mistral-7B | English | 0.9849 ± 0.0030 | **0.9869 ± 0.0030** | +0.0020 | 5/5 |
 | Mistral-7B | French | 0.9746 ± 0.0014 | **0.9774 ± 0.0019** | +0.0028 | 5/5 |
@@ -106,7 +106,7 @@ Mean ± sample std over 5 seeds: 1, 11, 29, 37, 43.
 | Llama-2-7B | French | 0.9738 ± 0.0012 | **0.9776 ± 0.0027** | +0.0037 | 5/5 |
 | Llama-2-7B | Vietnamese | 0.9705 ± 0.0020 | **0.9741 ± 0.0016** | +0.0037 | 5/5 |
 
-Per-seed results (Base / Improved):
+Per-seed results (Base (AUROC) / Improved (AUROC)):
 
 | Model | Lang | seed 1 | seed 11 | seed 29 | seed 37 | seed 43 |
 |---|---|---|---|---|---|---|
@@ -121,4 +121,4 @@ Per-seed results (Base / Improved):
 
 - Speed settings: `batch_size=128`, `lr=4e-4`, `ema_decay=0.995`. The paper's values are 28, 2e-4 and 0.999 (see `src/config.py`).
 - The seed changes both the train/test split and the inner folds.
-- Bangla (`bn`) and Amharic (`am`) require a local translated file `data/halueval_{lang}.json`.
+- Bangla (`bn`) and Vietnamese (`vi`) require a local translated file `data/halueval_{lang}.json`.
