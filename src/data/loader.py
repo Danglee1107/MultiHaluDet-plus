@@ -29,6 +29,15 @@ def load_halueval(lang='en'):
     else:
         raise FileNotFoundError(f"Translated dataset {local_path} not found. Please provide the translated dataset.")
 
+def clean_answer(text):
+    """Lower case, single spaces, no final full stop or danda.
+
+    The correct TriviaQA answers and the model-written wrong ones differ in form (lower case or
+    ALL CAPITALS against normal capitals, a final full stop), and that alone gives the label away.
+    """
+    return " ".join(text.lower().split()).rstrip(" .।")
+
+
 def load_triviaqa(lang='en', seed=42, max_samples=10000):
     """
     Loads the TriviaQA dataset with Gemma-2-2B generated hard negatives.
@@ -37,7 +46,8 @@ def load_triviaqa(lang='en', seed=42, max_samples=10000):
     local_path = f"data/triviaqa_{lang}.json"
     if os.path.exists(local_path):
         with open(local_path, 'r', encoding='utf-8') as f:
-            samples = json.load(f)
+            # Also here, not only at build time: a translator puts capitals and full stops back.
+            samples = [{**s, 'answer': clean_answer(s['answer'])} for s in json.load(f)]
             if max_samples and len(samples) > max_samples:
                 random.seed(seed)
                 samples = random.sample(samples, max_samples)

@@ -12,8 +12,9 @@ from scipy.special import logit
 import xgboost as xgb
 import lightgbm as lgb
 
-# Classifiers that use one core per fit; their 6 fits run in separate processes.
-SINGLE_CORE = {'svm'}
+# Classifiers whose fit does not scale over cores (lbfgs is a serial loop of small BLAS calls);
+# their 6 fits run in separate processes.
+SINGLE_CORE = {'svm', 'lr'}
 
 def _log_odds(clf, X):
     """Meta-learner input: the SVC margin as it is, the logit of the probability otherwise."""
